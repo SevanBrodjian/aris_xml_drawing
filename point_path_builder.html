@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Point Path Builder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Courier New', monospace;
+      background: #1a1a2e;
+      color: #cdd6f4;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #load-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      gap: 24px;
+    }
+    #load-screen h1 { font-size: 22px; color: #89b4fa; }
+    #load-screen p { color: #a6adc8; font-size: 13px; text-align: center; max-width: 380px; line-height: 1.6; }
+    #file-drop {
+      border: 2px dashed #45475a;
+      border-radius: 12px;
+      padding: 36px 56px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    #file-drop:hover, #file-drop.dragover { border-color: #89b4fa; background: #2a2a3e; }
+    #file-input { display: none; }
+
+    #app { display: none; height: 100vh; flex-direction: row; }
+
+    #svg-wrapper {
+      flex: 1;
+      overflow: hidden;
+      background: #181825;
+      cursor: crosshair;
+      user-select: none;
+      position: relative;
+    }
+    #svg-wrapper svg { width: 100%; height: 100%; display: block; }
+
+    #sidebar {
+      width: 250px;
+      min-width: 250px;
+      background: #1e1e2e;
+      border-left: 1px solid #313244;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .sb-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #585b70;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 3px 8px;
+      font-size: 11px;
+    }
+    .sk { color: #6c7086; }
+    .sv { color: #cba6f7; }
+
+    #point-list-wrap {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      border: 1px solid #313244;
+      padding: 5px;
+      background: #181825;
+      border-radius: 4px;
+    }
+    .pt-entry {
+      font-size: 10px;
+      padding: 1px 4px;
+      border-radius: 2px;
+      color: #a6adc8;
+      line-height: 1.65;
+      white-space: nowrap;
+    }
+    .pt-entry.latest { background: #2a2a3e; color: #f5c2e7; }
+    .pt-n { color: #45475a; min-width: 26px; display: inline-block; }
+
+    #status {
+      font-size: 10px;
+      color: #6c7086;
+      min-height: 30px;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+
+    button {
+      padding: 7px 10px;
+      border: 1px solid #45475a;
+      border-radius: 5px;
+      background: #313244;
+      color: #cdd6f4;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+      text-align: left;
+      transition: all 0.15s;
+    }
+    button:hover { background: #45475a; }
+    .btn-save { background: #1b3a5c; border-color: #89b4fa; color: #89b4fa; }
+    .btn-save:hover { background: #224f7a; }
+    .btn-del { border-color: #f38ba8; color: #f38ba8; }
+    .btn-del:hover { background: #3a1520; }
+
+    .hint { font-size: 10px; color: #313244; line-height: 1.6; margin-top: auto; }
+  </style>
+</head>
+<body>
+
+<!-- Load screen -->
+<div id="load-screen">
+  <h1>Point Path Builder</h1>
+  <p>Load an <code>svg_polylines.txt</code> file. All points are shown as dots. Click them in any order to build a path — points may be added more than once.</p>
+  <div id="file-drop" onclick="document.getElementById('file-input').click()">
+    <div style="font-size:30px;margin-bottom:10px">📂</div>
+    <div style="color:#89b4fa;margin-bottom:4px">Click or drag &amp; drop</div>
+    <div style="color:#6c7086;font-size:11px">svg_polylines.txt</div>
+  </div>
+  <input type="file" id="file-input" accept=".txt">
+</div>
+
+<!-- Main app -->
+<div id="app">
+  <div id="svg-wrapper">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+  <div id="sidebar">
+    <div class="sb-label">Dataset</div>
+    <div class="stat-grid">
+      <span class="sk">Polylines</span><span class="sv" id="s-lines">—</span>
+      <span class="sk">Points</span><span class="sv" id="s-total">—</span>
+      <span class="sk">Path pts</span><span class="sv" id="s-path">0</span>
+    </div>
+
+    <div class="sb-label">Selected path</div>
+    <div id="point-list-wrap"><div id="point-list"></div></div>
+
+    <div id="status">Load a file to begin</div>
+
+    <button onclick="undoLast()">↩  Undo last point</button>
+    <button onclick="clearAll()" class="btn-del">✕  Clear all</button>
+    <button onclick="savePath()" class="btn-save">⬇  Save path (unit width)</button>
+
+    <div class="hint">
+      Scroll: zoom · Drag: pan<br>
+      Click nearest dot: add to path<br>
+      Same point may be added multiple times
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+let polylines = [];    // array of [[x,y], ...]
+let allPts = [];       // flat: {x, y, pi, i, color}
+let selPath = [];      // [{x, y, pi, i}] in click order
+let hoverIdx = -1;
+
+// Pan state
+let panOrigin = null;  // {cx, cy, vbx, vby, vbw, vbh}
+let didDrag = false;
+
+// Initial viewport width (for stable ptRadius reference)
+let initVbW = 1;
+
+// ── File Loading ───────────────────────────────────────────────
+document.getElementById('file-input').addEventListener('change', e => {
+  if (e.target.files[0]) readFile(e.target.files[0]);
+});
+const dropEl = document.getElementById('file-drop');
+dropEl.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('dragover'); });
+dropEl.addEventListener('dragleave', () => dropEl.classList.remove('dragover'));
+dropEl.addEventListener('drop', e => {
+  e.preventDefault(); dropEl.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+});
+
+function readFile(file) {
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      polylines = parseFile(e.target.result);
+      if (!polylines.length) throw new Error('No valid polylines found in file');
+      boot();
+    } catch (err) { alert('Parse error: ' + err.message); }
+  };
+  r.readAsText(file);
+}
+
+function parseFile(text) {
+  const result = [];
+  for (const line of text.split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const raw = line.slice(tab + 1).trim();
+    if (!raw) continue;
+    // Python tuple syntax → JSON: (x,y) → [x,y]
+    const json = raw.replace(/\(/g, '[').replace(/\)/g, ']');
+    try {
+      const pts = JSON.parse(json);
+      if (Array.isArray(pts) && pts.length) result.push(pts);
+    } catch {}
+  }
+  return result;
+}
+
+// ── Boot ───────────────────────────────────────────────────────
+function boot() {
+  // Compute bounding box across all points
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  let total = 0;
+  for (const pl of polylines) {
+    for (const [x, y] of pl) {
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+      total++;
+    }
+  }
+
+  const pw = x1 - x0, ph = y1 - y0;
+  const pad = Math.max(pw, ph) * 0.06;
+  const vbx = x0 - pad, vby = y0 - pad;
+  const vbw = pw + 2 * pad, vbh = ph + 2 * pad;
+  initVbW = vbw;
+
+  const svg = document.getElementById('svg');
+  svg.setAttribute('viewBox', `${vbx} ${vby} ${vbw} ${vbh}`);
+  svg.innerHTML = '';
+
+  // Create layer stack
+  for (const id of ['l-dots', 'l-path', 'l-markers', 'l-hover']) {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.id = id;
+    svg.appendChild(g);
+  }
+
+  const ptR = vbw * 0.005;
+  const COLORS = ['#89b4fa', '#a6e3a1', '#f38ba8', '#cba6f7', '#f9e2af', '#89dceb', '#fab387'];
+
+  allPts = [];
+  const dotLayer = svg.querySelector('#l-dots');
+  for (let pi = 0; pi < polylines.length; pi++) {
+    const color = COLORS[pi % COLORS.length];
+    for (let i = 0; i < polylines[pi].length; i++) {
+      const [x, y] = polylines[pi][i];
+      dotLayer.appendChild(mkDot(x, y, ptR, color, 0.75));
+      allPts.push({ x, y, pi, i, color });
+    }
+  }
+
+  document.getElementById('s-lines').textContent = polylines.length;
+  document.getElementById('s-total').textContent = total;
+
+  document.getElementById('load-screen').style.display = 'none';
+  const app = document.getElementById('app');
+  app.style.display = 'flex';
+
+  svg.addEventListener('mousemove', onHover);
+  svg.addEventListener('click', onClickSVG);
+  svg.addEventListener('wheel', onWheel, { passive: false });
+  svg.addEventListener('mousedown', onMouseDown);
+  svg.addEventListener('mouseleave', clearHover);
+  window.addEventListener('mousemove', onPanMove);
+  window.addEventListener('mouseup', onMouseUp);
+
+  setStatus('Hover over a dot, then click to add it to the path');
+}
+
+// ── SVG Element Helpers ────────────────────────────────────────
+function mkDot(x, y, r, fill, opacity) {
+  const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', r);
+  c.setAttribute('fill', fill); c.setAttribute('fill-opacity', opacity);
+  return c;
+}
+
+function mkRing(x, y, r, stroke, sw) {
+  const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', r);
+  c.setAttribute('fill', 'none');
+  c.setAttribute('stroke', stroke); c.setAttribute('stroke-width', sw);
+  c.setAttribute('vector-effect', 'non-scaling-stroke');
+  return c;
+}
+
+function mkSeg(x1, y1, x2, y2, stroke, sw, opacity) {
+  const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+  l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+  l.setAttribute('stroke', stroke); l.setAttribute('stroke-width', sw);
+  l.setAttribute('stroke-opacity', opacity ?? 0.85);
+  l.setAttribute('vector-effect', 'non-scaling-stroke');
+  return l;
+}
+
+// ── Coordinate Helpers ─────────────────────────────────────────
+function toSVGCoords(clientX, clientY) {
+  const svg = document.getElementById('svg');
+  const pt = svg.createSVGPoint();
+  pt.x = clientX; pt.y = clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function ptRadius() {
+  // Keep dot radius proportional to initial viewport, not current zoom
+  return initVbW * 0.005;
+}
+
+// ── Nearest Point ──────────────────────────────────────────────
+function findNearest(sx, sy) {
+  const vb = document.getElementById('svg').viewBox.baseVal;
+  const thresh = vb.width * 0.025;  // 2.5% of current visible width
+  let best = -1, bestD = thresh;
+  for (let k = 0; k < allPts.length; k++) {
+    const d = Math.hypot(allPts[k].x - sx, allPts[k].y - sy);
+    if (d < bestD) { bestD = d; best = k; }
+  }
+  return best;
+}
+
+// ── Hover ──────────────────────────────────────────────────────
+function onHover(e) {
+  if (panOrigin && didDrag) return;
+  const { x, y } = toSVGCoords(e.clientX, e.clientY);
+  const idx = findNearest(x, y);
+  if (idx === hoverIdx) return;
+  hoverIdx = idx;
+  const hl = document.getElementById('l-hover');
+  hl.innerHTML = '';
+  if (idx < 0) { setStatus('Hover over a dot to highlight it'); return; }
+  const pt = allPts[idx];
+  const r = ptRadius();
+  hl.appendChild(mkRing(pt.x, pt.y, r * 2.8, '#f5c2e7', 1.5));
+  hl.appendChild(mkDot(pt.x, pt.y, r * 1.1, '#ffffff', 0.6));
+  setStatus(`(${pt.x.toFixed(3)}, ${pt.y.toFixed(3)})  ·  polyline ${pt.pi + 1}, point ${pt.i + 1}`);
+}
+
+function clearHover() {
+  hoverIdx = -1;
+  document.getElementById('l-hover').innerHTML = '';
+  setStatus('');
+}
+
+// ── Click ──────────────────────────────────────────────────────
+function onClickSVG() {
+  if (didDrag) return;  // was a pan, not a click
+  if (hoverIdx < 0) return;
+  const pt = allPts[hoverIdx];
+  selPath.push({ x: pt.x, y: pt.y, pi: pt.pi, i: pt.i });
+  redrawPath();
+  refreshList();
+  document.getElementById('s-path').textContent = selPath.length;
+}
+
+// ── Pan ────────────────────────────────────────────────────────
+function onMouseDown(e) {
+  if (e.button !== 0) return;
+  didDrag = false;
+  const vb = document.getElementById('svg').viewBox.baseVal;
+  panOrigin = { cx: e.clientX, cy: e.clientY,
+                vbx: vb.x, vby: vb.y, vbw: vb.width, vbh: vb.height };
+}
+
+function onPanMove(e) {
+  if (!panOrigin) return;
+  const dx = e.clientX - panOrigin.cx;
+  const dy = e.clientY - panOrigin.cy;
+  if (!didDrag && Math.hypot(dx, dy) > 4) didDrag = true;
+  if (!didDrag) return;
+  const svg = document.getElementById('svg');
+  const rect = svg.getBoundingClientRect();
+  const sx = panOrigin.vbw / rect.width;
+  const sy = panOrigin.vbh / rect.height;
+  const vb = svg.viewBox.baseVal;
+  vb.x = panOrigin.vbx - dx * sx;
+  vb.y = panOrigin.vby - dy * sy;
+}
+
+function onMouseUp() {
+  panOrigin = null;
+  // Give the click event time to read didDrag, then clear it
+  setTimeout(() => { didDrag = false; }, 20);
+}
+
+// ── Zoom ───────────────────────────────────────────────────────
+function onWheel(e) {
+  e.preventDefault();
+  const { x, y } = toSVGCoords(e.clientX, e.clientY);
+  const vb = document.getElementById('svg').viewBox.baseVal;
+  const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+  vb.x = x - (x - vb.x) * factor;
+  vb.y = y - (y - vb.y) * factor;
+  vb.width  *= factor;
+  vb.height *= factor;
+}
+
+// ── Path Drawing ───────────────────────────────────────────────
+function redrawPath() {
+  const svg = document.getElementById('svg');
+  svg.querySelector('#l-path').innerHTML = '';
+  svg.querySelector('#l-markers').innerHTML = '';
+  if (!selPath.length) return;
+
+  const pl = svg.querySelector('#l-path');
+  const ml = svg.querySelector('#l-markers');
+  const r = ptRadius();
+
+  // Line segments
+  for (let k = 1; k < selPath.length; k++) {
+    const a = selPath[k - 1], b = selPath[k];
+    pl.appendChild(mkSeg(a.x, a.y, b.x, b.y, '#f9e2af', 1.8));
+  }
+
+  // Count how many times each point appears so we can show multiplicity
+  const countMap = {};
+  for (const p of selPath) {
+    const key = `${p.pi}:${p.i}`;
+    countMap[key] = (countMap[key] || 0) + 1;
+  }
+
+  // Markers (filled dots over source dots, plus order number)
+  for (let k = 0; k < selPath.length; k++) {
+    const pt = selPath[k];
+    const isLast = k === selPath.length - 1;
+    const mr = r * (isLast ? 2.4 : 1.8);
+    ml.appendChild(mkDot(pt.x, pt.y, mr, isLast ? '#fab387' : '#f9e2af', isLast ? 0.95 : 0.7));
+  }
+
+  // Start marker: distinct green ring
+  const s = selPath[0];
+  ml.appendChild(mkRing(s.x, s.y, r * 3.2, '#a6e3a1', 2));
+}
+
+// ── Sidebar List ───────────────────────────────────────────────
+function refreshList() {
+  const list = document.getElementById('point-list');
+  list.innerHTML = '';
+  for (let k = 0; k < selPath.length; k++) {
+    const pt = selPath[k];
+    const div = document.createElement('div');
+    div.className = 'pt-entry' + (k === selPath.length - 1 ? ' latest' : '');
+    div.innerHTML = `<span class="pt-n">${k + 1}.</span>(${pt.x.toFixed(3)}, ${pt.y.toFixed(3)})`;
+    list.appendChild(div);
+  }
+  document.getElementById('point-list-wrap').scrollTop = 999999;
+}
+
+// ── Controls ───────────────────────────────────────────────────
+function undoLast() {
+  if (!selPath.length) return;
+  selPath.pop();
+  redrawPath(); refreshList();
+  document.getElementById('s-path').textContent = selPath.length;
+}
+
+function clearAll() {
+  selPath = [];
+  redrawPath(); refreshList();
+  document.getElementById('s-path').textContent = 0;
+}
+
+function savePath() {
+  if (!selPath.length) { alert('No points selected yet.'); return; }
+
+  const raw = selPath.map(p => [p.x, p.y]);
+  const xs = raw.map(p => p[0]);
+  const ys = raw.map(p => p[1]);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys);
+
+  if (xMax === xMin) {
+    alert('Cannot rescale: all selected points have the same X coordinate.');
+    return;
+  }
+
+  const scale = 1.0 / (xMax - xMin);
+  const out = raw.map(([x, y]) => [
+    +((x - xMin) * scale).toFixed(6),
+    +((y - yMin) * scale).toFixed(6)
+  ]);
+
+  const json = JSON.stringify(out, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'path_unit_width.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── Status ─────────────────────────────────────────────────────
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+</script>
+</body>
+</html>
