@@ -9,8 +9,11 @@ scale and translation before calling `write_xml()`.
 CLI usage:
     python3 draw_lines.py input.json -o output.xml [--scale S] [--tx TX] [--ty TY]
 
-input.json format:
-    [ [[x0,y0],[x1,y1],...], [[x0,y0],...], ... ]
+JSON input formats accepted:
+    list of polylines:  [ [[x0,y0],[x1,y1],...], [[x0,y0],...], ... ]
+    single polyline:    [ [x0,y0], [x1,y1], ... ]          (e.g. path_unit_width.json)
+
+For JSON input, y values are negated (vertical flip) before any scale/translate.
 """
 
 import argparse
@@ -85,12 +88,39 @@ def write_xml(lines, output, frame_index=0, start_fish_id=1):
 
 
 # ---------------------------------------------------------------------------
+# JSON loader
+# ---------------------------------------------------------------------------
+
+def load_json_polylines(path):
+    """
+    Load polylines from a JSON file.
+
+    Accepts two formats:
+      - list of polylines: [ [[x,y],...], [[x,y],...] ]
+      - single polyline:   [ [x,y], [x,y], ... ]
+
+    Y values are negated to flip the drawing vertically, matching the
+    orientation convention of the txt format.
+    """
+    with open(path) as f:
+        data = json.load(f)
+
+    # Detect format: if first element is a pair of numbers → single polyline
+    if isinstance(data[0][0], (int, float)):
+        polylines = [data]
+    else:
+        polylines = data
+
+    return [[(float(x), -float(y)) for x, y in line] for line in polylines]
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 def main():
     p = argparse.ArgumentParser(description="Write polylines to ARIS XML")
-    p.add_argument("input", help="JSON file: list of polylines, each a list of [x, y] pairs")
+    p.add_argument("input", help="JSON file (single polyline or list of polylines)")
     p.add_argument("-o", "--output", default="lines.xml")
     p.add_argument("--scale", type=float, default=1.0, help="Uniform scale factor (default 1.0)")
     p.add_argument("--tx", type=float, default=0.0, help="X translation in metres (default 0)")
@@ -99,10 +129,7 @@ def main():
     p.add_argument("--start-fish-id", type=int, default=1)
     args = p.parse_args()
 
-    with open(args.input) as f:
-        raw = json.load(f)
-
-    lines = [[tuple(pt) for pt in polyline] for polyline in raw]
+    lines = load_json_polylines(args.input)
     lines = transform(lines, scale=args.scale, translate=(args.tx, args.ty))
     write_xml(lines, args.output, frame_index=args.frame_index, start_fish_id=args.start_fish_id)
 

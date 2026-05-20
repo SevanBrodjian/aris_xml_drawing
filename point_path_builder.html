@@ -205,9 +205,7 @@ function readFile(file) {
 function parseFile(text) {
   const result = [];
   for (const line of text.split('\n')) {
-    const tab = line.indexOf('\t');
-    if (tab < 0) continue;
-    const raw = line.slice(tab + 1).trim();
+    const raw = line.trim();
     if (!raw) continue;
     // Python tuple syntax → JSON: (x,y) → [x,y]
     const json = raw.replace(/\(/g, '[').replace(/\)/g, ']');

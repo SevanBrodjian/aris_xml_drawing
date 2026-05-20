@@ -21,7 +21,7 @@ Usage:
 import argparse
 import ast
 
-from draw_lines import transform, write_xml
+from draw_lines import load_json_polylines, transform, write_xml
 
 
 def load_polylines(path):
@@ -53,7 +53,10 @@ def main():
     p.add_argument("--frame-index", type=int, default=0)
     args = p.parse_args()
 
-    polylines = load_polylines(args.input)
+    if args.input.endswith(".json"):
+        polylines = load_json_polylines(args.input)
+    else:
+        polylines = load_polylines(args.input)
     print(f"Loaded {len(polylines)} polyline(s) from {args.input}")
 
     world_lines = transform(polylines, scale=args.scale, translate=(args.tx, args.ty))
